@@ -1,12 +1,15 @@
 import math
 import statistics
 import warnings
+import logging
 
 import numpy as np
 from hmmlearn.hmm import GaussianHMM
 from sklearn.model_selection import KFold
 from asl_utils import combine_sequences
 
+logger = logging.getLogger('logger')
+logger.setLevel(logging.INFO)
 
 class ModelSelector(object):
     '''
@@ -76,9 +79,32 @@ class SelectorBIC(ModelSelector):
         """
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        # TODO implement model selection based on BIC scores
-        raise NotImplementedError
+        best_score = float('inf')
+        best_model = None
 
+        # TODO implement model selection based on BIC scores
+        for n_components in range(self.min_n_components, self.max_n_components):
+            logger.info('Fitting model with {} states'.format(n_components))
+
+            try:
+                hmm_model = self.base_model(n_components)
+                logL = hmm_model.score(self.X, self.lengths)
+
+                M = self.X.shape[1]
+
+                n_parameters = (n_components * M * (M + 3)) / 2
+                score = -2 * logL + n_parameters * np.log(self.X.shape[0])
+
+                logger.debug('Model states: {}'.format(n_components),
+                             'Log Likelihood: {}'.format(logL),
+                             'BIC: {}'.format(score))
+                if score < best_score:
+                    best_score = score
+                    best_model = hmm_model
+            except:
+                logger.critical('Running into some kind of bugs in the library according to Slack.')
+                logger.critical('Skipping model with {} states'.format(n_components))
+        return best_model
 
 class SelectorDIC(ModelSelector):
     ''' select best model based on Discriminative Information Criterion
@@ -94,16 +120,80 @@ class SelectorDIC(ModelSelector):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
         # TODO implement model selection based on DIC scores
-        raise NotImplementedError
+        best_DIC = float('inf')
+        best_model = None
+
+        for n_components in range(self.min_n_components, self.max_n_components):
+            logger.info('Fitting model with {} states'.format(n_components))
+
+            try:
+                hmm_model = self.base_model(n_components)
+                logL = hmm_model.score(self.X, self.lengths)
+
+                M = self.X.shape[1]
+
+                other_words = [word for word in self.words if word != self.this_word]
+
+                other_logLs = []
+
+                for word in other_words:
+                    X, length = self.hwords[word]
+                    other_logLs.append(hmm_model.score(X, length))
+
+                DIC = logL - np.sum(other_logLs) / (M - 1)
+                logger.debug('Model states: {}'.format(n_components),
+                             'Log Likelihood: {}'.format(logL),
+                             'DIC: {}'.format(DIC))
+                if DIC < best_DIC:
+                    best_DIC = DIC
+                    best_model = hmm_model
+            except:
+                logger.critical('Running into some kind of bugs in the library according to Slack.')
+                logger.critical('Skipping model with {} states'.format(n_components))
+
+        return best_model
+
+
 
 
 class SelectorCV(ModelSelector):
     ''' select best model based on average log Likelihood of cross-validation folds
 
     '''
-
     def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
         # TODO implement model selection using CV
-        raise NotImplementedError
+        best_score = float('-inf')
+        best_model = None
+
+        # TODO implement model selection based on BIC scores
+        ksplit = KFold(n_splits = 2)
+        for n_components in range(self.min_n_components, self.max_n_components):
+            logger.info('Fitting model with {} states'.format(n_components))
+
+            cv_logLs = []
+            for cv_train_idx, cv_test_idx in ksplit.split(self.sequences):
+                train_X, train_lengths = combine_sequences(cv_train_idx, self.sequences)
+                test_X, test_lengths = combine_sequences(cv_test_idx, self.sequences)
+
+                try:
+                    hmm_model = GaussianHMM(n_components=n_components, covariance_type="diag", n_iter=1000,
+                                            random_state=self.random_state, verbose=False).fit(train_X, train_lengths)
+
+                    cv_logLs.append(hmm_model.score(test_X, test_lengths))
+
+                except:
+                    logger.critical('Running into some kind of bugs in the library according to Slack.')
+                    logger.critical('Skipping model with {} states'.format(n_components))
+
+            cv_logL = np.mean(cv_logLs)
+
+            if cv_logL > best_score:
+                best_score = cv_logL
+                best_model = hmm_model
+
+
+        return best_model
+
+
